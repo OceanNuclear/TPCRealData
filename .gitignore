@@ -1,0 +1,4 @@
+train/
+val/
+model_actual_noCompress_DICT.pth
+trainREAL_testREAL_2_50RESET_MORE.pth
