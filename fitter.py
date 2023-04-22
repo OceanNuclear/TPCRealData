@@ -16,17 +16,22 @@ Steps for processing each image:
     [x]but reframed to something more complicated like:
         - determine the connected component for each level (ignoring spurious holes and dots smaller than a certain size)
         - Pick the ridge of each peak as the trail.
-[ ]Get the true outline of each blob
+[x]Get the true outline of each blob
     - THINK OF IT AS A SPANNING TREE!
     - fill out all of the holes first.
     - less-than-fully-connected nodes should be near the edge! remove them?
     - Use the 'wildfire' algorithm!
-    [ ]OH that was easy, just convolve and then grep for all of the values !=0 or 1.
+    [x]OH that was easy, just convolve and then grep for all of the values !=0 or 1.
 [ ]Get the rough backbones of each blob, by burning away the edges.
     [ ]Correct this backbone using circular/gaussian weight-windows to find a series of weighted corrected backbone.
         - Or I can use argmax within that circle. Might be a bit ugly but it'll work.
         [ ]resolution = 0.5 pixel?
-[ ]Model it as some sort of distribution?
+[x]Model it as some sort of distribution? Nah.
+- Goal: extract the ridges, despite the noise.
+[ ]Determine highest point on track. That must be the peak.
+[ ]Determine second highest point. Draw a line between these two.
+    [ ]Rayleigh criterion equivalent: if the link between these two peaks doesn't reach 0.5 times of the height of the thing, then they're definitely two separate ridges.
+[ ]Determine the lengthscale: width of the peak by fitting in the normal direction.
 
 
 [ ]Somehow make sure a new trail is started when there's
@@ -66,19 +71,23 @@ TRANSLATION_TABLE = {
     254:20,
 }
 vector_table = np.vectorize(TRANSLATION_TABLE.get)
-zero_sum_quad = ary([
+unitary_quad = ary([
                     [ 0, 1, 0],
                     [ 1, 0, 1],
                     [ 0, 1, 0], ])/4
 
-zero_sum_oct = ary([
+unitary_oct = ary([
                     [ 1, 2, 1],
                     [ 2, 0, 2],
                     [ 1, 2, 1],])/12
+secondary_oct = unitary_oct + ary([
+                    [ 0, 0, 0],
+                    [ 0, 1, 0],
+                    [ 0, 0, 0],])
 
 _clockwise_matrix = ary([[0,1],[-1,0]])
 _anti_clockwise_matrix = ary([[0,-1],[1,0]])
-
+minmax = lambda x: (x.min(), x.max())
 
 
 class BoundaryCrawler():
@@ -153,12 +162,15 @@ class OperationOrderError(Exception):
 _mnorm = lambda x: x/x.max()
 
 class Event():
-    def __init__(self, filename):
+    def __init__(self, filename, check_translation=False):
         self.path = filename
         data = read_raw_pixel_values(self.path)
         # Turn the R,G,B channels back into u, v, w.
         u, v, w = data.transpose([2,0,1]) # each channel has [time, strip #]
         self.u, self.v, self.w = vector_table(u), vector_table(v), vector_table(w)
+        if check_translation:
+            asstring = "The TRANSLATION_TABLE.key() must contain all of the possible pixel values, and translate them to positive integers!"
+            assert not any(None in self.u, None in self.v, None in self.w), asstring
 
     def label_large_chunks(self, percentile_threshold=97, size_threshold=40):
         """
@@ -236,7 +248,7 @@ class Event():
                 #     new_signal_blobs[selected_cells] = 0 
             setattr(self, strip_direction+"_blobs", new_signal_blobs)
 
-    def clean_blobs(self, prominence_threshold=1.5, fill_holes=False):
+    def clean_blobs(self, prominence_threshold=1.5, patch_small_holes=False):
         """Remove any blobs whose max. prominence does not reach the theshold"""
         for strip_direction in "uvw":
             if not hasattr(self, strip_direction+"_blobs"):
@@ -258,14 +270,14 @@ class Event():
                 # if max_prominence<prominence_threshold:
                     blob_map[selected_cells]=0
 
-            if fill_holes:
+            if patch_small_holes:
                 # remove the holes inside of the remaining (definitely trail) blobs using nested for-loops.
                 for final_component_label in np.unique(blob_map.flatten()):
                     if final_component_label==0:
                         continue
                     current_component = blob_map==final_component_label
                     background_cells = blob_map==0
-                    wetted_by_current_cells = convolve2d(current_component, zero_sum_quad, 'same') # 
+                    wetted_by_current_cells = convolve2d(current_component, unitary_quad, 'same') # 
                     # as long as the hole is small enough to be completely 'wetted' by the selected cells,
                     # so it must also be fully surrounded by the current component.
                     empty_cell_clusters, num_empty_clusters = connected_comp_label(background_cells)
@@ -287,10 +299,67 @@ class Event():
                 if blob_label==0:
                     continue
                 selected_cells = blob_map==blob_label
+                # expanded_map = convolve2d(selected_cells, secondary_oct, 'same')
+                # outline_lists.append(expanded_map<=1)
                 crawler = BoundaryCrawler(selected_cells)
                 boundary = crawler.run()
                 outline_lists.append(boundary)
             setattr(self, strip_direction+"_outline_lists", outline_lists)
+
+    def highlight_blobs(self, strip_direction):
+        """Returns a 2D array of the same shape as 'u', 'v', or 'w',
+        but with all non-peak cells set to np.nan and peak cells set to raw-background"""
+
+        if hasattr(self, strip_direction+"_blobs"):
+            blob_map = getattr(self, strip_direction+"_blobs")
+            raw_data = getattr(self, strip_direction)
+            row_threshold_used = getattr(self, strip_direction+"_row_threshold_used")
+            background = np.broadcast_to(row_threshold_used[:, None], raw_data.shape)
+            prominence = raw_data - background
+        else:
+            raise OperationOrderError(strip_direction+"_blobs must have first been calculated before calling this method!")
+        for label in sorted(list(set(blob_map.flatten()))):
+            if label==0:
+                continue
+            matching_blob = blob_map==label
+            return np.where(matching_blob, prominence, np.nan)
+
+    def plot_as_height_map(self, strip_direction):
+        heights = self.highlight_blobs(strip_direction)
+        _yy, _xx = np.indices(heights.shape)
+
+        has_values = np.isfinite(heights)
+        max_height = np.round(np.nanmax(heights)).astype(int)
+        where_yvalues, where_xvalues = np.where(has_values)
+        ylims, xlims = minmax(where_yvalues), minmax(where_xvalues)
+        vis_square = np.logical_and((ylims[0]<=_yy) & (_yy<=ylims[1]),
+                                    (xlims[0]<=_xx) & (_xx<=xlims[1]))
+
+        fig = plt.figure()
+        ax = fig.add_subplot(projection='3d')
+
+        # ax.bar3d(_xx[has_values], _yy[has_values], 0, 1, 1, heights[has_values], alpha=0.2)
+        px, py, pz = (  _xx[vis_square].reshape(np.diff(ylims)[0]+1, np.diff(xlims)[0]+1),
+                        _yy[vis_square].reshape(np.diff(ylims)[0]+1, np.diff(xlims)[0]+1),
+                    heights[vis_square].reshape(np.diff(ylims)[0]+1, np.diff(xlims)[0]+1)
+                    # +1 needed because inclusive of the upper limit as well.
+                    )
+        # ax.plot_wireframe(px, py, pz)
+        ax.contour(px, py, pz, levels=np.arange(max_height))
+        ax.plot_surface(px, py, pz, alpha=0.5)
+            
+        for outline in getattr(self, strip_direction+"_outline_lists"):
+            _outline_y, _outline_x = ary(outline).T
+            ax.plot(_outline_x, _outline_y, np.zeros(np.shape(outline)[0]))
+        # voxel_filler = np.zeros([*heights.shape, max_height], dtype=bool)
+        # for _y, _x in zip(where_yvalues, where_xvalues):
+        #     voxel_filler[_y, _x, :np.round(heights[_y,_x]).astype(int)] = True
+        # ax.voxels(voxel_filler)
+        ax.set_title(strip_direction)
+        ax.set_zlabel("intensity")
+        ax.set_xlabel("time (bin)")
+        ax.set_ylabel("strip number")
+        plt.show()
 
     def triangulate(self):
         pass
@@ -327,6 +396,11 @@ if __name__=="__main__":
             event.clean_blobs()
             event.calculate_outline()
 
+            event.plot_as_height_map('u')
+            event.plot_as_height_map('v')
+            event.plot_as_height_map('w')
+
+
             fig, ax0 = plt.subplots(1)
             fig.suptitle(f"{num_prongs}-prongs evt{i}.png")
             ax0.imshow(ary([event.u, event.v, event.w]).transpose([1,2,0])
@@ -337,6 +411,8 @@ if __name__=="__main__":
             [ax0.plot(*(ary(line).T[::-1]), color='blue') for line in event.w_outline_lists]
 
             ax0.set_title("Overlayed by extracted outlines")
+            ax0.set_xlabel("time (bin)")
+            ax0.set_ylabel("strip number")
             plt.tight_layout()
             try:
                 plt.show()
