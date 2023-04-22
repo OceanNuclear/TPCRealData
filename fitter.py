@@ -23,20 +23,27 @@ Steps for processing each image:
     - Use the 'wildfire' algorithm!
     [x]OH that was easy, just convolve and then grep for all of the values !=0 or 1.
 [ ]Get the rough backbones of each blob, by burning away the edges.
-    [ ]Correct this backbone using circular/gaussian weight-windows to find a series of weighted corrected backbone.
         - Or I can use argmax within that circle. Might be a bit ugly but it'll work.
         [ ]resolution = 0.5 pixel?
 [x]Model it as some sort of distribution? Nah.
 - Goal: extract the ridges, despite the noise.
-[ ]Determine highest point on track. That must be the peak.
-[ ]Determine second highest point. Draw a line between these two.
-    [ ]Rayleigh criterion equivalent: if the link between these two peaks doesn't reach 0.5 times of the height of the thing, then they're definitely two separate ridges.
-[ ]Determine the lengthscale: width of the peak by fitting in the normal direction.
+[ ]Objective 1: find the lengthscale:
+[ ]Objective 2: Find the tips of each ridge
+[ ]Objective 3: Find the path taken by each ridge.
+    [ ]Somehow make sure a new trail is started when there's
+        - a sharp kink in trail direction
+        - a sharp kink in the d(trail intensity)/d(trail length) (i.e. change of slope of intensity of the trail)
 
+[ ]Approach 1: From raw pixel values
+    [ ]Determine highest point on track. That must be the peak.
+    [ ]Determine second highest point. Draw a line between these two.
+        [ ]Rayleigh criterion equivalent: if the link between these two peaks doesn't reach 0.5 times of the height of the thing, then they're definitely two separate ridges.
+    [ ]width of the peak by fitting in the perpendicular direction of the thing
+[ ]Approach 2: Burn away the edges
+    [ ]This can also give us useful information about the width of the track, i.e. along the ridge how many steps of burning is required before the fire reaches the centre.
+[ ]Approach 3: Correct this backbone using circular/gaussian weight-windows to find a series of weighted corrected backbone.
+[ ]Approach 4: Hybrid of all the above
 
-[ ]Somehow make sure a new trail is started when there's
-    - a sharp kink in trail direction
-    - a sharp kink in the d(trail intensity)/d(trail length) (i.e. change of slope of intensity of the trail)
 [ ]triangulate the trail at each timepoint, allowing for small offsets
 4. Plot the trails in 3D
 5. Plot trail ridge on top
