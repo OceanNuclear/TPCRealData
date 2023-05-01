@@ -6,6 +6,8 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from scipy.ndimage import label as connected_comp_label
 from scipy.signal import convolve2d
+from skimage.morphology import skeletonize
+import skimage
 """
 TODO:
 Steps for processing each image:
@@ -33,12 +35,70 @@ Steps for processing each image:
     [ ]Somehow make sure a new trail is started when there's
         - a sharp kink in trail direction
         - a sharp kink in the d(trail intensity)/d(trail length) (i.e. change of slope of intensity of the trail)
+____Useful skimge functions
+# EXCITING thing to try:
+transform.
+    iradon
+    iradon_sart
+    ifrt2
+segmentation.morphological_chan_vese
+filters.
+    frangi # detect continuous ridges, e.g. vessels, wrinkles, rivers.
+    meijering # detect continuous ridges, e.g. neurites, wrinkles, rivers.
+    sato # detect continuous ridges, e.g. tubes, wrinkles, rivers.
+    hessian # detect continuous edges, e.g. vessels, wrinkles, rivers.
+
+    apply_hysteresis_threshold # I can make the mask extraction better using hystersis
+    difference_of_gaussians # and I want to try this
+
+graph.
+    # find the actual paths using one of these
+    MCP
+    MCP_*
+    shortest_path
+    route_through_array
+    central_pixel
+morphology.
+    thin
+    skeletonize
+    medial_axis
+# I can use line extractor after the skeletonize:
+transform.
+    hough_line
+    hough_line_peaks
+    probabilistic_hough_line
+morphology.
+    (isotropic_/binary_/)erosion
+    (isotropic_/binary_/)opening
+    (isotropic_/binary_/)closing
+    (isotropic_/binary_/)dilation
+    reconstruction
+    # See https://scikit-image.org/docs/stable/auto_examples/applications/plot_morphology.html#sphx-glr-auto-examples-applications-plot-morphology-py
+    h_minima
+    h_maxima
+    max_tree
+    remove_small_holes
+    remove_small_objects
+
+segmentation.
+    active_contour
+draw.
+    polygon2mask
+    polygon_perimeter
+restoration.
+    ellipsoid
+segmentation.
+    flood
+    flood_fill
+util.
+    apply_parallel
+____
 
 [ ]Approach 1: From raw pixel values
     [ ]Determine highest point on track. That must be the peak.
     [ ]Determine second highest point. Draw a line between these two.
         [ ]Rayleigh criterion equivalent: if the link between these two peaks doesn't reach 0.5 times of the height of the thing, then they're definitely two separate ridges.
-    [ ]width of the peak by fitting in the perpendicular direction of the thing
+    [ ]width of the peak by fitting in the perpendicular direction of the drawn straight line
 [ ]Approach 2: Burn away the edges
     [ ]This can also give us useful information about the width of the track, i.e. along the ridge how many steps of burning is required before the fire reaches the centre.
 [ ]Approach 3: Correct this backbone using circular/gaussian weight-windows to find a series of weighted corrected backbone.
@@ -331,24 +391,67 @@ class Event():
             matching_blob = blob_map==label
             return np.where(matching_blob, prominence, np.nan)
 
+    @classmethod
+    def get_extrema(cls, bool_map):
+        """Given a boolean map highlighting an interseting feature on the 2D picture,
+        find minimum and maximum coordinates in the y and x directions.
+
+        Parameter
+        ---------
+        bool_map: np.array with ndim==2 and dtype==bool
+
+        Returns
+        -------
+        ylims: tuple(int, int)
+        xlims: tuple(int, int)
+        """
+        where_yvalues, where_xvalues = np.where(bool_map)
+        ylims, xlims = minmax(where_yvalues), minmax(where_xvalues)
+        return ylims, xlims # Remember that the y-direction is the first axis.
+
+    @classmethod
+    def get_new_shape(cls, bool_map):
+        """Return the new shape of the 2D array, 
+        if it was to be trimmed down to only include the feature(s) highlighted by bool_map"""
+        ylims, xlims = cls.get_extrema(bool_map)
+        return np.diff(ylims)[0]+1, np.diff(xlims)[0]+1
+
+
+    @classmethod
+    def get_bounding_box(cls, bool_map):
+        """Create the minimum bounding box where all of the interesting features highlighted by the bool_map is included.
+
+        Parameter
+        ---------
+        bool_map: np.array with ndim==2 and dtype==bool
+
+        Returns
+        -------
+        ylims: tuple(int, int)
+        xlims: tuple(int, int)
+        """
+        _yy, _xx = np.indices(bool_map.shape)
+        ylims, xlims = cls.get_extrema(bool_map)
+        vis_square = np.logical_and((ylims[0]<=_yy) & (_yy<=ylims[1]),
+                                    (xlims[0]<=_xx) & (_xx<=xlims[1]))
+        return vis_square
+
     def plot_as_height_map(self, strip_direction):
         heights = self.highlight_blobs(strip_direction)
         _yy, _xx = np.indices(heights.shape)
 
         has_values = np.isfinite(heights)
         max_height = np.round(np.nanmax(heights)).astype(int)
-        where_yvalues, where_xvalues = np.where(has_values)
-        ylims, xlims = minmax(where_yvalues), minmax(where_xvalues)
-        vis_square = np.logical_and((ylims[0]<=_yy) & (_yy<=ylims[1]),
-                                    (xlims[0]<=_xx) & (_xx<=xlims[1]))
+        vis_square = self.get_bounding_box(has_values)
 
         fig = plt.figure()
         ax = fig.add_subplot(projection='3d')
 
         # ax.bar3d(_xx[has_values], _yy[has_values], 0, 1, 1, heights[has_values], alpha=0.2)
-        px, py, pz = (  _xx[vis_square].reshape(np.diff(ylims)[0]+1, np.diff(xlims)[0]+1),
-                        _yy[vis_square].reshape(np.diff(ylims)[0]+1, np.diff(xlims)[0]+1),
-                    heights[vis_square].reshape(np.diff(ylims)[0]+1, np.diff(xlims)[0]+1)
+        newshape = self.get_new_shape(has_values)
+        px, py, pz = (  _xx[vis_square].reshape(newshape),
+                        _yy[vis_square].reshape(newshape),
+                    heights[vis_square].reshape(newshape)
                     # +1 needed because inclusive of the upper limit as well.
                     )
         # ax.plot_wireframe(px, py, pz)
