@@ -8,6 +8,7 @@ from scipy.ndimage import label as connected_comp_label
 from scipy.signal import convolve2d
 from skimage.morphology import skeletonize
 import skimage
+from skimage import transform, filters, graph, morphology, segmentation, draw, segmentation, restoration, util
 """
 TODO:
 Steps for processing each image:
@@ -41,15 +42,20 @@ transform.
     iradon
     iradon_sart
     ifrt2
-segmentation.morphological_chan_vese
+    hough_line
+    hough_line_peaks
+    probabilistic_hough_line
+[x]segmentation.morphological_chan_vese
 filters.
-    frangi # detect continuous ridges, e.g. vessels, wrinkles, rivers.
-    meijering # detect continuous ridges, e.g. neurites, wrinkles, rivers.
-    sato # detect continuous ridges, e.g. tubes, wrinkles, rivers.
-    hessian # detect continuous edges, e.g. vessels, wrinkles, rivers.
+    [ofrangi # detect continuous ridges, e.g. vessels, wrinkles, rivers.
+    [o]butterworth
+    [x]meijering # detect continuous ridges, e.g. neurites, wrinkles, rivers.
+    [x]sato # detect continuous ridges, e.g. tubes, wrinkles, rivers.
+    # sato does clean it up a bit.
+    [x]hessian # detect continuous edges, e.g. vessels, wrinkles, rivers.
 
-    apply_hysteresis_threshold # I can make the mask extraction better using hystersis
-    difference_of_gaussians # and I want to try this
+    [x]apply_hysteresis_threshold # I can make the mask extraction better using hystersis
+    [x]difference_of_gaussians # and I want to try this
 
 graph.
     # find the actual paths using one of these
@@ -63,33 +69,29 @@ morphology.
     skeletonize
     medial_axis
 # I can use line extractor after the skeletonize:
-transform.
-    hough_line
-    hough_line_peaks
-    probabilistic_hough_line
 morphology.
-    (isotropic_/binary_/)erosion
-    (isotropic_/binary_/)opening
-    (isotropic_/binary_/)closing
-    (isotropic_/binary_/)dilation
-    reconstruction
+    [x](isotropic_/binary_/)erosion
+    [x](isotropic_/binary_/)opening
+    [x](isotropic_/binary_/)closing
+    [x](isotropic_/binary_/)dilation
+    [x]reconstruction
     # See https://scikit-image.org/docs/stable/auto_examples/applications/plot_morphology.html#sphx-glr-auto-examples-applications-plot-morphology-py
-    h_minima
-    h_maxima
-    max_tree
+    [x]h_minima
+    [x]h_maxima
+    [x]max_tree
     remove_small_holes
     remove_small_objects
 
 segmentation.
     active_contour
 draw.
-    polygon2mask
-    polygon_perimeter
+    [o]polygon2mask
+    [x]polygon_perimeter
 restoration.
-    ellipsoid
+    [x]ellipsoid_kernel
 segmentation.
-    flood
-    flood_fill
+    [x]flood
+    [x]flood_fill
 util.
     apply_parallel
 ____
@@ -416,7 +418,6 @@ class Event():
         ylims, xlims = cls.get_extrema(bool_map)
         return np.diff(ylims)[0]+1, np.diff(xlims)[0]+1
 
-
     @classmethod
     def get_bounding_box(cls, bool_map):
         """Create the minimum bounding box where all of the interesting features highlighted by the bool_map is included.
@@ -491,6 +492,10 @@ class Event():
     #     copy_of_self = cls.__new__()
 
 if __name__=="__main__":
+    def load_event(num_prongs, num_evt):
+        event_name = "train/merged_{}p/evt{}.png".format(num_prongs, num_evt)
+        return Event(event_name)
+
     for num_prongs in range(1,4):
         if num_prongs!=3:
             continue
@@ -499,23 +504,41 @@ if __name__=="__main__":
                 # Use 3-prong: evt1, 16, 17 .png as the examples.
             if i >20:
                 continue
-            event_name = "train/merged_{}p/evt{}.png".format(num_prongs, i)
-            event = Event(event_name)
-            event.label_large_chunks(95, 40)
-            event.expand_blob()
-            event.clean_blobs()
-            event.calculate_outline()
+            event = load_event(num_prongs, i)
+            def old_analysis_procedure(evt):
+                evt.label_large_chunks(95, 40)
+                evt.expand_blob()
+                evt.clean_blobs()
+                evt.calculate_outline()
+                return
+            old_analysis_procedure(event)
 
             event.plot_as_height_map('u')
             event.plot_as_height_map('v')
             event.plot_as_height_map('w')
-
 
             fig, ax0 = plt.subplots(1)
             fig.suptitle(f"{num_prongs}-prongs evt{i}.png")
             ax0.imshow(ary([event.u, event.v, event.w]).transpose([1,2,0])
                 /(len(TRANSLATION_TABLE)-1))
             
+            # def plot_a_line(line, step_size, color, offset=None, label=None, **kwargs):
+            #     outline_xy = ary(line)[:,::-1]
+            #     ax0.plot(*(outline_xy[offset::step_size].T), color=color, label=label, **kwargs)
+
+            # for line in event.u_outline_lists:
+            #     plot_a_line(line, 1, 'red', label='u1')
+            #     plot_a_line(line, 3, 'tomato', label='u3')
+            #     plot_a_line(line, 4, 'firebrick', label='u4')
+            # for line in event.v_outline_lists:
+            #     plot_a_line(line, 1, 'green', label='v1')
+            #     plot_a_line(line, 3, 'lime', label='v3')
+            #     plot_a_line(line, 4, 'darkgreen', label='v4')
+            # for line in event.w_outline_lists:
+            #     plot_a_line(line, 1, 'blue', label='w1')
+            #     plot_a_line(line, 3, 'royalblue', label='w3')
+            #     plot_a_line(line, 4, 'mediumblue', label='w4')
+
             [ax0.plot(*(ary(line).T[::-1]), color='red') for line in event.u_outline_lists]
             [ax0.plot(*(ary(line).T[::-1]), color='green') for line in event.v_outline_lists]
             [ax0.plot(*(ary(line).T[::-1]), color='blue') for line in event.w_outline_lists]
@@ -527,4 +550,24 @@ if __name__=="__main__":
             try:
                 plt.show()
             except KeyboardInterrupt:
+                print("KeyboardInterrupt - program exit.")
                 sys.exit()
+            import seaborn as sns
+
+"""
+Potential workflow:
+# filters.
+    frangi(sigmas=range(4,18,2), black_ridges=False, mode='constant'),
+    butterworth(cutoff_frequency_ratio=0.05,
+                high_pass=False,
+                order=4,
+                squared_butterworth=True)
+
+[optional] filters.apply_hysteresis_threshold()
+[optional] outline = segmentation.active_contour(
+                    ary(outline_i)[::skip_size],
+                    alpha=0.005, beta=0.05
+                )
+    bool_map = polygon2mask(outline)
+    skeletonize(bool_map)
+"""

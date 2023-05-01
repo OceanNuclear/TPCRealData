@@ -1,0 +1,167 @@
+%`
+%\nonstopmode
+\hbadness=100000
+\documentclass[a4paper, 12pt]{article}
+\usepackage{amsmath,amsfonts,caption,float,geometry,graphicx,mathtools,pythonhighlight,textcomp,url,verbatim,subcaption,tabularx, longtable, ulem, hyperref, tikz} %,parskip
+\geometry{ a4paper, total={170mm,257mm}, left=20mm, top=20mm}
+\newcommand{\uul}[1]{\underline{\underline{#1}}}
+\newcommand{\matr}[1]{\uul{\textbf{#1}}}
+\newcommand{\apriori}[0]{\textit{a priori}}
+\newcommand{\ve}[1]{\boldsymbol{#1}}
+\newcommand{\pythoncode}[2]{
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\begin{adjustwidth}{-1.3cm}{-1.3cm}
+\texttt{#1}
+\inputpython{#2}{1}{1500}
+\end{adjustwidth}
+}
+\usepackage[toc, page]{appendix}
+% \usepackage[dvipsnames]{xcolor}
+% \definecolor{subr}{rgb}{0.8, 0.33, 0.0}
+% \definecolor{func}{rgb}{0.76, 0.6, 0.42}
+
+\begin{document}
+% \includegraphics[width=8cm]{CoverPage/UoBlogo.pdf}
+% \hrule
+% \bigbreak
+% \textbf{F}usion Neutron \textbf{Acti}vation Spectra \textbf{U}nfolding by \textbf{N}eural \textbf{N}etworks \\
+% (FACTIUNN)                                      \\
+% \hrule
+% \bigbreak
+% \begin{minipage}[b]{0.4\textwidth}
+%     \includegraphics[height=2cm]{CoverPage/CCFElogo.jpeg}
+%   \end{minipage}
+%   \hfill
+%   \begin{minipage}[b]{0.4\textwidth}
+%     \includegraphics[height=3cm]{CoverPage/UKAEAlogo.jpeg}
+% \end{minipage}
+    
+\begin{table}[!h]
+\centering
+\begin{tabular}{rl}
+author:&Ocean Wong          \\
+collaborator:&Kristian Haverson    \\
+date:  &2023-05-01       \\
+Organization:&Sheffield Hallam University\\
+            & Culham Centre for Fusion Energy
+\end{tabular}
+\end{table}
+\hrule
+\begin{abstract}
+    This pdf explans and documents the rationale of the design choices behind the trail extraction algorithm. (currently named \verb|fitter.py|.)
+\end{abstract}
+% \emph{Keywords:} activation, neutronics, fusion
+% \hline
+% \twocolumn
+\section{The problem}
+We have three sets of strip-detectors pointed in the u-, v- and w-, offset from each other by 60$^\circ$ (Figure~\ref{fig:uvw-diagram}.
+\begin{figure}
+\centering
+\includegraphics[width=1\textwidth]{uvw-diagram.pdf} %Stupid latex doesn't allow two dots in the filename.
+\caption{A diagram given to me by the Polish collaborators via Kristian.} \label{fig:uvw-diagram}
+\end{figure}
+Each event consist of tracks made by anywhere between one to four particles, which are then drifted towards the strips by an electric field. Any strip that intersect with the track detects a signal (seemingly giving a reading = one of the integers between 0-20) at every time bin. For tracks in the $u-$direction, we can plot the strip ID number in the vertical direction, and time bins in the horizontal direction(i.e. the z-direction profile of the track as projected onto the $u-$strips). This can be plotted in the red channel of a $510\times510$ .png file. Coincidentally, the number of time bins for $u-$strips = that of $v-$strips = that of $w-$strips $= 510$, and the number of $u-$strips = that of $v-$strips = that of $w-$strips $=510$. Therefore, we can simply place in the same $510\times510$ matrix from the $u-$strips in the green channel and the $510\times510$ from the $w-$ strips in the blue channel as well, forming a matrix of shape (3, 510, 510), forming an image like Figure~\ref{fig:3-0}.
+\begin{figure}
+\centering
+\includegraphics{train/merged_3p/evt0.png}
+\caption{A sample of a 3-prong event. Vertical direction = strip number, horizontal direction = time bin.\label{fig:3-0}}
+\end{figure}
+
+We want to find out the energy of the the particles by the amount of charge they left behind and the angle at which events occur. Therefore, we have to:
+\begin{enumerate}
+    \item Determinte the type of event that occured, for each event triggered and captured;
+    \item Find out the energy (scalar quantity) and momentum (vector quantity) of each particle, by deciding:
+    \begin{itemize}
+        \item the amount of ionization left behind by each particle,
+        \item the length of the track left behind by each particle,
+        \item the angle that the track makes with other particle's tracks.
+    \end{itemize}
+\end{enumerate}
+
+To do this, I have chosen the following workflow:
+\begin{enumerate}
+    \item reconstruct the 3D shape of the track
+    \item find the bi-/tri-furcation points of these tracks (for events where $>1$ particples are involved and multiple tracks are left), so that the direction of travel for each particle can be determined.
+    \item{} [optional] improve upon this guessed tracks by fitting (using these guessed tracks as the starting points), so that the $\frac{d\text{energy deposited}}{d\text{unit length}}$ at each point along the track can be recovered.
+\end{enumerate}
+
+\subsection{The strategy}
+To extract the 3D shape of the track, we must first identify where the tracks are on the 2D plots in the red, green and blue channels of the png picture, in the form of a lists of coordinates for the ``backbone'' of each strip-direction. Then we can decide the type of event that this belongs to, so that we can combine these three 2D backbones into a single 3D backbone.
+
+\section{2D backbone extraction}
+Given the $510\times510$ pixel image (each pixel can take a value between 0-20), we need to extract the backbone of (and possibly outline the area left behind by) each track.
+This is a deceptively difficult problem.
+Luckily we are not the first people to encounter this type of problem where ``ridges'' need to be extracted from an image. Similar problems had occurred in medical imaging, such that there are plenty of tools available in open-source libraries such as \verb|scikit-image| to perform these types of extraction.
+
+My intuition is that the backbone can be extracted more easily if we first determine the area of interest, i.e. highlight the blob of pixels that clearly belongs to the tracks and ignore the pixels that belongs to the background; my intuition says that any doing this in the reverse order would be much more difficult.
+
+Feature extraction like this is a trivial enough task, and could be done with a convolutional neural network; but in the spirit of reducing the number of points of failure (i.e. reducing the number of unknown blackbox parameters that can go wrong) and making sure that the data analysis process is transparent and physically intuitive (so that we can continue to wrangle with the data confidently further down the chain of analysis), I have opted to do this using manually chosen model and manually tuned parameters.
+
+\subsection{Determining the background}\label{sec:bgDetermination}
+I noticed that in some cases, some strips have elevated background (see Figure~\ref{fig:1-1}.
+My intution is that applying a global threshold instead of a per-row threshold would cause the entire streak to be identified as ``part of the track'', which is obviously not the case.
+\begin{figure}
+\centering
+\includegraphics{train/merged_1p/evt12.png}
+\caption{A sample of a 1-prong event. Note the horizontal streaks which may have been caused by the incorrect bias subtraction as the event was triggered too late, was overlapping with the tail of another event, or any other electronics error.\label{fig:1-12}}
+\end{figure}
+To avoid the misclassification of these types of events, I have written a simply filter that performs the following algorithm:
+\begin{enumerate}
+    \item Determine the brightness percentile curve for each row(i.e. for each strip across the entire $510$ time bins),
+    \item Highlight pixels with brightness larger than the $n\%$ percentile.
+    \item But any blobs with less than $m$ pixels highlighted would be considered too small to keep, and be discarded.
+\end{enumerate}
+Via manual fitting, $n=95\%, m=40$ was found to be the best algorithms.
+
+\subsection{Extracting the outline}\label{sec:outlineDetermination}
+Once the background is determined, it is fairly easy to determine what is in the foreground using simple negation of boolean variable. But determining the outline for each blob the pixel is a bit more difficult. After some experimentation, I have chosen to do it the lazy but fast way, which is to ``keep walking clockwise while touching the interface between the background-foreground element until we return to the starting point''.
+(I have not noticed any faster way of doing this, but if there is any out there I would be happy to implement it.)
+
+\subsection{Extracting the backbone}\label{sec:2DBackbone}
+skeletonize
+
+\subsection{Development log}
+I was initially unaware of \verb|scikit-image|'s extensive image processing library applicable for these types of feature extraction purposes, but after stumbling across a YouTube video about \href{https://youtu.be/R87Qlq_wSY8}{cleaning a LiDAR-acquried floor-plan} using the \verb|skimage.morphology.skeletonize| function, I attempted to use this library and discovered many more useful functions.
+If I were introduced to the \verb|skimage| library earlier, I would have taken a slightly approach and used other \verb|skimage| functions in Section~\ref{sec:bgDetermination} to reduce the workload and increase the time available for experimentation with manually tweaking parameters in the functions to optimize extraction.
+
+In fact, I have looked through and experimented wiht the complete \verb|skimage| library. While some of them do not fit my use case at all, I have honed down on a few that 
+\begin{itemize}
+    \item Step 2 of Section~\ref{sec:bgDetermination} would have been replaced by \verb|skimage.filters.frangi(sigmas=range(4,18,2), black_ridges=False)|, \verb|skimage.filters.meijerling(sigmas=range(4,18,2), black_ridges=False)| or \verb|skimage.filters.butterworth(cutoff_frequency_ratio=0.05, high_pass=False, order=4, squared_butterworth=True)|. These are shown to be excellent at identifying the ridges through manual experimentations.
+    \item Step 3 of Section~\ref{sec:bgDetermination} would have been replaced by \verb|skimage.morphology.remove_small_objects|. I'm sure the results would have been similar, but the performance may have been improved.
+    \item An optional step 4 may be added to Section~\ref{sec:bgDetermination} using \verb|skimage.filters.apply_hysteresis_threshold|
+\end{itemize}
+
+This is not intended to be a complete documentation so only a few demonstrative plots will be inserted. But for example, for the particular difficult case showing the data collected by the $u-$strips in one of the events (Figure~\ref{fig:raw-u}):
+\begin{figure}
+\centering
+\includegraphics[width=0.5\textwidth]{latexDoc/raw-u.png}
+\caption{The raw data collected by a single direction of strips (the $u-$direction).\label{fig:raw-u}}
+\end{figure}
+The Frangi (Figure~\ref{fig:u-frangi-4-18-2}), Meijerling (Figure~\ref{fig:u-meijerling-4-18-2}), and Butterworth (Figure~\ref{fig:u-butterworth}) filter managed to highlight the track sufficiently, so that when a simple global-threshold algorithm or the hysteresis-threshold algorithm is applied, it can extract the outline of the tracks left behind by the two particles.
+\begin{figure}
+\centering
+\includegraphics[width=0.5\textwidth]{latexDoc/u-frangi-4-18-2.png}
+\caption{Frangi filter applied\label{fig:u-frangi-4-18-2}}
+\end{figure}
+\begin{figure}
+\centering
+\includegraphics[width=0.5\textwidth]{latexDoc/u-meijerling-4-18-2.png}
+\caption{Meijerling filter applied\label{fig:u-meijerling-4-18-2}}
+\end{figure}
+\begin{figure}
+\centering
+\includegraphics[width=0.5\textwidth]{latexDoc/u-butterworth.png}
+\caption{Butterworth filter applied\label{fig:u-butterworth}}
+\end{figure}
+
+% \bibliographystyle{unsrt}
+% \bibliography{FACTIUNN}
+\end{document}
+
+% \begin{appendices}
+% \begin{longtable}{ccc}
+%     1&2&3
+% \end{longtable}
+% \end{appendices}
+%`
