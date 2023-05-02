@@ -492,12 +492,12 @@ if __name__=="__main__":
             ax0.imshow(ary([event.u, event.v, event.w]).transpose([1,2,0])
                 /(len(TRANSLATION_TABLE)-1))
             
-            heatmap on top of heatmap
-            # [ax0.plot(*(ary(line).T[::-1]), color='red') for line in event.u_outline_lists]
-            # [ax0.plot(*(ary(line).T[::-1]), color='green') for line in event.v_outline_lists]
-            # [ax0.plot(*(ary(line).T[::-1]), color='blue') for line in event.w_outline_lists]
+            # heatmap on top of heatmap
+            [ax0.plot(*(ary(line).T[::-1]), color='red') for line in event.u_outline_lists]
+            [ax0.plot(*(ary(line).T[::-1]), color='green') for line in event.v_outline_lists]
+            [ax0.plot(*(ary(line).T[::-1]), color='blue') for line in event.w_outline_lists]
 
-            ax0.set_title("Overlayed by the backbones their backbones")
+            ax0.set_title("Encircled by the outline")
 
             ax0.set_xlabel("time (bin)")
             ax0.set_ylabel("strip number")
