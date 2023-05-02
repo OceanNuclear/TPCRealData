@@ -206,7 +206,7 @@ class Event():
             setattr(self, strip_direction+"_blobs", signal_blobs)
         self.size_threshold_used = size_threshold
 
-    def expand_blob(self, new_percentile_threshold=85):
+    def expand_blobs(self, new_percentile_threshold=85):
         """
         Tries to expand on the existing large blobs that are detected by label_large_chunks.
         Parameters
@@ -244,7 +244,7 @@ class Event():
         """Remove any blobs whose max. prominence does not reach the theshold"""
         for strip_direction in "uvw":
             if not hasattr(self, strip_direction+"_blobs"):
-                raise OperationOrderError("self.{u,v,w}_blobs must've been first populated by self.label_large_chunks and expanded upon using self.expand_blob")
+                raise OperationOrderError("self.{u,v,w}_blobs must've been first populated by self.label_large_chunks and expanded upon using self.expand_blobs")
             raw_data = getattr(self, strip_direction)
             blob_map = getattr(self, strip_direction+"_blobs")
             row_threshold_used = getattr(self, strip_direction+"_row_threshold_used")
@@ -279,7 +279,7 @@ class Event():
                             blob_map[selected_empty_cells] = final_component_label
             setattr(self, strip_direction+"_blobs", blob_map)
 
-    def calculate_outline(self, separation_tolerance=2):
+    def trace_outlines(self):
         """Trace outline of the blobs
         This whole module can actually be replaced by
         skimage.segmentation.mark_boundaries
@@ -287,7 +287,7 @@ class Event():
         skimage.segmentation.find_boundaries"""
         for strip_direction in "uvw":
             if not hasattr(self, strip_direction+"_blobs"):
-                raise OperationOrderError("self.{u,v,w}_blobs must've been first populated by self.label_large_chunks and expanded upon using self.expand_blob")
+                raise OperationOrderError("self.{u,v,w}_blobs must've been first populated by self.label_large_chunks and expanded upon using self.expand_blobs")
             blob_map = getattr(self, strip_direction+"_blobs")
 
             outline_lists = list()
@@ -475,9 +475,9 @@ if __name__=="__main__":
 
             def analysis_procedure1(evt):
                 evt.label_large_chunks(95, 40)
-                evt.expand_blob()
+                evt.expand_blobs()
                 evt.clean_blobs()
-                evt.calculate_outline()
+                evt.trace_outlines()
 
             fig, ax0 = plt.subplots(1)
             analysis_procedure1(event)
@@ -507,8 +507,9 @@ if __name__=="__main__":
 """
 Potential workflow:
 1.
-    old_analysis_procedure()
-    active_contour(0.05, 0.005)
+    analysis_procedure1()
+    active_contour(0.05, 0.005):
+        # read kass1988ActiveContours.pdf to figure out the meaning of alpha, beta, gamma, etc.
     outline = segmentation.active_contour(
                     ary(outline_i)[::skip_size],
                     alpha=0.005, beta=0.05
