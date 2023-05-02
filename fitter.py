@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import label as connected_comp_label
 from scipy.signal import convolve2d
 from skimage.morphology import skeletonize
-import skimage
+from skimage.segmentation import active_contour
+from skimage.draw import polygon2mask
 import seaborn as sns
 """
 TODO:
@@ -467,9 +468,11 @@ if __name__=="__main__":
         if num_prongs!=3:
             continue
         for i in range(0,371):
-            # if i not in (1, 16, 17, 20,):
-                # Use 3-prong: evt1, 16, 17 .png as the examples.
-            if i>20:
+            if any([
+                    # i!=11,
+                    # i>20,
+                    i not in (1, 11, 16, 17, 20,),
+                ]):
                 continue
             event = load_event(num_prongs, i)
 
@@ -479,21 +482,22 @@ if __name__=="__main__":
                 evt.clean_blobs()
                 evt.trace_outlines()
 
-            fig, ax0 = plt.subplots(1)
             analysis_procedure1(event)
-
             event.plot_as_height_map('u')
             event.plot_as_height_map('v')
             event.plot_as_height_map('w')
+            fig, ax0 = plt.subplots(1)
 
             fig.suptitle(f"{num_prongs}-prongs evt{i}.png")
             ax0.imshow(ary([event.u, event.v, event.w]).transpose([1,2,0])
                 /(len(TRANSLATION_TABLE)-1))
             
-            [ax0.plot(*(ary(line).T[::-1]), color='red') for line in event.u_outline_lists]
-            [ax0.plot(*(ary(line).T[::-1]), color='green') for line in event.v_outline_lists]
-            [ax0.plot(*(ary(line).T[::-1]), color='blue') for line in event.w_outline_lists]
-            ax0.set_title("Overlayed by extracted outlines")
+            heatmap on top of heatmap
+            # [ax0.plot(*(ary(line).T[::-1]), color='red') for line in event.u_outline_lists]
+            # [ax0.plot(*(ary(line).T[::-1]), color='green') for line in event.v_outline_lists]
+            # [ax0.plot(*(ary(line).T[::-1]), color='blue') for line in event.w_outline_lists]
+
+            ax0.set_title("Overlayed by the backbones their backbones")
 
             ax0.set_xlabel("time (bin)")
             ax0.set_ylabel("strip number")
@@ -510,11 +514,14 @@ Potential workflow:
     analysis_procedure1()
     active_contour(0.05, 0.005):
         # read kass1988ActiveContours.pdf to figure out the meaning of alpha, beta, gamma, etc.
-    outline = segmentation.active_contour(
+    snake = segmentation.active_contour(
                     ary(outline_i)[::skip_size],
-                    alpha=0.005, beta=0.05
+                    alpha=0.003, # continuity (self-attraction, i.e. contractive force)
+                    beta=0.05, # curvature (kink not allowed)
+                    gamma=0.5 # how strongly coupled to the image
+                    w_line = -0.05 # attraction to brightness (-ve = darkness)
                 )
-    bool_map = polygon2mask(outline)
+    bool_map = polygon2mask(snake)
 2. 
     skeletonize(bool_map)
 3. 
