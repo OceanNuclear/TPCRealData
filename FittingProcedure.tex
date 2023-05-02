@@ -109,13 +109,48 @@ My intution is that applying a global threshold instead of a per-row threshold w
 To avoid the misclassification of these types of events, I have written a simply filter that performs the following algorithm:
 \begin{enumerate}
     \item Determine the brightness percentile curve for each row(i.e. for each strip across the entire $510$ time bins),
-    \item Highlight pixels with brightness larger than the $n\%$ percentile.
-    \item But any blobs with less than $m$ pixels highlighted would be considered too small to keep, and be discarded.
+    \item The ``background'' for the entire row is set as the $n\%$ percentile of brightness.
+    \item Pixels with brightness $>$ the $n\%$ percentile are highlighted as the foreground.
+    \item ``Connected Components'' are identified - i.e. all pixels belonging to the same discrete ``blob'' is given the same ID (This step considers pixels as neighbours if they share at least one edge (Von Neumann neighbourhood)).
+    \begin{itemize}
+        \item But any cluster with less than $m$ pixels highlighted would be considered too small to keep, and will be discarded.
+    \end{itemize}
 \end{enumerate}
-Via manual fitting, $n=95\%, m=40$ was found to be the best algorithms.
+Via manual fitting (trial and error), $n=95\%, m=40$ was found to be the best settings for the current problem.
+
+In this section we shall use one of the most pathological example (Figure~\ref{fig:1-1}) to demonstrate the extraction process.
+After applying the steps demonstrated in this sub-section (Section~\ref{sec:bgDetermination}), Figure~\ref{fig:u-uncleaned} plot only the extracted connected components in the $u-$direction strips vs time plot.
+\begin{figure}
+\centering
+\includegraphics[width=0.5\textwidth]{latexDoc/u-uncleaned.png}
+\caption{Notice how there are 3 components (3 colours are used) even though all three of them should have belonged to the same trail.\label{fig:u-uncleaned}}
+\end{figure}
+
+\subsection{Cleaning the foreground}\label{sec:cleanforeground}
+Once the background is determined, it is fairly easy to determine what is in the foreground using simple negation of boolean variable. But these often include some regions of noise, large enough to not have been rejected in the last step of Section~\ref{sec:bgDetermination} (false positives), while some parts of the trail may have been ignored because individual pixels within the trail may have dipped below the $n\%$ percentile due to statistical fluctuation (false negatives).
+
+To reduce these false positives and false negatives (i.e. increase the area under the ROC curve), the 
+\begin{enumerate}
+    \item After the discarding step above, Connected Components are expanded by re-identification using a lowered percentile threshold of $n'\%$.
+    The definition of ``neighbouring'' pixels is also relaxed to ``sharing at least one vertex (Moore neighbourhood)''. This picks up any previously ignored pixels on the trail (the false negatives), and coalesces jagged, broken, but neighbouring components together.
+    \item And then any blobs (i.e. ``connected component'') with ``mean prominence'' $<p$ is also discarded, where we define
+    \begin{equation}
+    \text{prominence} = \text{raw pixel value} - \text{background threshold }(n'\%\text{ percentile}).
+    \end{equation}
+    This removes the false positives.
+\end{enumerate}
+Via manual fitting (trial and error), $n'=85\%, p=1.5$ was found to be the best settings for the current problem.
+
+After applying the steps demonstrated in this sub-section (Section~\ref{sec:bgDetermination}), Figure~\ref{fig:u-cleaned} plot only the extracted connected components in the $u-$direction strips vs time plot.
+\begin{figure}
+\centering
+\includegraphics[width=0.5\textwidth]{latexDoc/u-cleaned.png}
+\caption{Now after the cleaning step, there is only 1 single colour (1 component, corresponding to the entire trail) in the entire graph as we expect.\label{fig:u-cleaned}}
+\end{figure}
 
 \subsection{Extracting the outline}\label{sec:outlineDetermination}
-Once the background is determined, it is fairly easy to determine what is in the foreground using simple negation of boolean variable. But determining the outline for each blob the pixel is a bit more difficult. After some experimentation, I have chosen to do it the lazy but fast way, which is to ``keep walking clockwise while touching the interface between the background-foreground element until we return to the starting point''.
+Determining the outline for each blob the pixel is conceptually easy but computationally untidy.
+After some experimentation, I have chosen to do it the lazy but fast way, which is to ``keep walking clockwise while touching the interface between the background-foreground element until we return to the starting point''.
 (I have not noticed any faster way of doing this, but if there is any out there I would be happy to implement it.)
 
 \subsection{Extracting the backbone}\label{sec:2DBackbone}
@@ -127,7 +162,7 @@ If I were introduced to the \verb|skimage| library earlier, I would have taken a
 
 In fact, I have looked through and experimented wiht the complete \verb|skimage| library. While some of them do not fit my use case at all, I have honed down on a few that 
 \begin{itemize}
-    \item Step 2 of Section~\ref{sec:bgDetermination} would have been replaced by \verb|skimage.filters.frangi(sigmas=range(4,18,2), black_ridges=False)|, \verb|skimage.filters.meijerling(sigmas=range(4,18,2), black_ridges=False)| or \verb|skimage.filters.butterworth(cutoff_frequency_ratio=0.05, high_pass=False, order=4, squared_butterworth=True)|. These are shown to be excellent at identifying the ridges through manual experimentations.
+    \item Step 2 of Section~\ref{sec:bgDetermination} would have been replaced by \verb|skimage.filters.frangi(sigmas=range(4,18,2), black_ridges=False)|, \verb|skimage.filters.meijering(sigmas=range(4,18,2), black_ridges=False)| or \verb|skimage.filters.butterworth(cutoff_frequency_ratio=0.05, high_pass=False, order=4, squared_butterworth=True)|. These are shown to be excellent at identifying the ridges through manual experimentations.
     \item Step 3 of Section~\ref{sec:bgDetermination} would have been replaced by \verb|skimage.morphology.remove_small_objects|. I'm sure the results would have been similar, but the performance may have been improved.
     \item An optional step 4 may be added to Section~\ref{sec:bgDetermination} using \verb|skimage.filters.apply_hysteresis_threshold|
 \end{itemize}
@@ -138,7 +173,7 @@ This is not intended to be a complete documentation so only a few demonstrative 
 \includegraphics[width=0.5\textwidth]{latexDoc/raw-u.png}
 \caption{The raw data collected by a single direction of strips (the $u-$direction).\label{fig:raw-u}}
 \end{figure}
-The Frangi (Figure~\ref{fig:u-frangi-4-18-2}), Meijerling (Figure~\ref{fig:u-meijerling-4-18-2}), and Butterworth (Figure~\ref{fig:u-butterworth}) filter managed to highlight the track sufficiently, so that when a simple global-threshold algorithm or the hysteresis-threshold algorithm is applied, it can extract the outline of the tracks left behind by the two particles.
+The Frangi (Figure~\ref{fig:u-frangi-4-18-2}), Meijerling (Figure~\ref{fig:u-meijering-4-18-2}), and Butterworth (Figure~\ref{fig:u-butterworth}) filter managed to highlight the track sufficiently, so that when a simple global-threshold algorithm or the hysteresis-threshold algorithm is applied, it can extract the outline of the tracks left behind by the two particles.
 \begin{figure}
 \centering
 \includegraphics[width=0.5\textwidth]{latexDoc/u-frangi-4-18-2.png}
@@ -146,14 +181,38 @@ The Frangi (Figure~\ref{fig:u-frangi-4-18-2}), Meijerling (Figure~\ref{fig:u-mei
 \end{figure}
 \begin{figure}
 \centering
-\includegraphics[width=0.5\textwidth]{latexDoc/u-meijerling-4-18-2.png}
-\caption{Meijerling filter applied\label{fig:u-meijerling-4-18-2}}
+\includegraphics[width=0.5\textwidth]{latexDoc/u-meijering-4-18-2.png}
+\caption{Meijerling filter applied\label{fig:u-meijering-4-18-2}}
 \end{figure}
 \begin{figure}
 \centering
 \includegraphics[width=0.5\textwidth]{latexDoc/u-butterworth.png}
 \caption{Butterworth filter applied\label{fig:u-butterworth}}
 \end{figure}
+
+But upon further examination, they exhibit poorer performance in some other cases (Figure~\ref{fig:u-frangi-worse} to \ref{fig:u-butterworth-worse}). This is because only acts to destroy existing information, without adding new information.
+\begin{figure}
+\centering
+\includegraphics[width=0.5\textwidth]{latexDoc/u-frangi-worse.png}
+\caption{Case where the Frangi filter lose luster.\label{fig:u-frangi-worse}}
+\end{figure}
+\begin{figure}
+\centering
+\includegraphics[width=0.5\textwidth]{latexDoc/u-meijering-worse.png}
+\caption{Case where the Meijerling filter lose luster\label{fig:u-meijering-worse}}
+\end{figure}
+\begin{figure}
+\centering
+\includegraphics[width=0.5\textwidth]{latexDoc/u-butterworth-worse.png}
+\caption{Butterworth filter applied\label{fig:u-butterworth-worse}}
+\end{figure}
+It is clear that any thresholding done on these plots would yield a worse result than thresholding on the raw data.
+
+Other thoughts and notes for myself:
+\begin{itemize}
+    \item I won't try \verb|graph.MCP| etc. because it would be quite difficult to use minimum(/maximum)-cost-path in this scenario where bifurcation points arises.
+    \item I won't use \verb|transform| (including inverse radon and hough line) transform because the paths aren't always straight.
+\end{itemize}
 
 % \bibliographystyle{unsrt}
 % \bibliography{FACTIUNN}

@@ -8,101 +8,24 @@ from scipy.ndimage import label as connected_comp_label
 from scipy.signal import convolve2d
 from skimage.morphology import skeletonize
 import skimage
-from skimage import transform, filters, graph, morphology, segmentation, draw, segmentation, restoration, util
+import seaborn as sns
 """
 TODO:
-Steps for processing each image:
-[x]Remove horizontal streaks (by performing fourier analysis in the vertical direction)
-[x]Set background noise level
-[x]Extract ALL curvilinear parts, by various techniques, e.g.:
-    [x]use the peak prominence algorithm on each channel, but adapted into 2D (time x strip #)
-    [x]but reframed to something more complicated like:
-        - determine the connected component for each level (ignoring spurious holes and dots smaller than a certain size)
-        - Pick the ridge of each peak as the trail.
-[x]Get the true outline of each blob
-    - THINK OF IT AS A SPANNING TREE!
-    - fill out all of the holes first.
-    - less-than-fully-connected nodes should be near the edge! remove them?
-    - Use the 'wildfire' algorithm!
-    [x]OH that was easy, just convolve and then grep for all of the values !=0 or 1.
-[ ]Get the rough backbones of each blob, by burning away the edges.
-        - Or I can use argmax within that circle. Might be a bit ugly but it'll work.
-        [ ]resolution = 0.5 pixel?
-[x]Model it as some sort of distribution? Nah.
-- Goal: extract the ridges, despite the noise.
-[ ]Objective 1: find the lengthscale:
+
 [ ]Objective 2: Find the tips of each ridge
 [ ]Objective 3: Find the path taken by each ridge.
     [ ]Somehow make sure a new trail is started when there's
         - a sharp kink in trail direction
         - a sharp kink in the d(trail intensity)/d(trail length) (i.e. change of slope of intensity of the trail)
 ____Useful skimge functions
-# EXCITING thing to try:
-transform.
-    iradon
-    iradon_sart
-    ifrt2
-    hough_line
-    hough_line_peaks
-    probabilistic_hough_line
-[x]segmentation.morphological_chan_vese
-filters.
-    [ofrangi # detect continuous ridges, e.g. vessels, wrinkles, rivers.
-    [o]butterworth
-    [x]meijering # detect continuous ridges, e.g. neurites, wrinkles, rivers.
-    [x]sato # detect continuous ridges, e.g. tubes, wrinkles, rivers.
-    # sato does clean it up a bit.
-    [x]hessian # detect continuous edges, e.g. vessels, wrinkles, rivers.
-
-    [x]apply_hysteresis_threshold # I can make the mask extraction better using hystersis
-    [x]difference_of_gaussians # and I want to try this
-
-graph.
-    # find the actual paths using one of these
-    MCP
-    MCP_*
-    shortest_path
-    route_through_array
-    central_pixel
-morphology.
-    thin
-    skeletonize
-    medial_axis
-# I can use line extractor after the skeletonize:
-morphology.
-    [x](isotropic_/binary_/)erosion
-    [x](isotropic_/binary_/)opening
-    [x](isotropic_/binary_/)closing
-    [x](isotropic_/binary_/)dilation
-    [x]reconstruction
-    # See https://scikit-image.org/docs/stable/auto_examples/applications/plot_morphology.html#sphx-glr-auto-examples-applications-plot-morphology-py
-    [x]h_minima
-    [x]h_maxima
-    [x]max_tree
-    remove_small_holes
-    remove_small_objects
-
-segmentation.
-    active_contour
-draw.
-    [o]polygon2mask
-    [x]polygon_perimeter
-restoration.
-    [x]ellipsoid_kernel
-segmentation.
-    [x]flood
-    [x]flood_fill
-util.
-    apply_parallel
-____
+skimage.util.apply_parallel
 
 [ ]Approach 1: From raw pixel values
     [ ]Determine highest point on track. That must be the peak.
     [ ]Determine second highest point. Draw a line between these two.
         [ ]Rayleigh criterion equivalent: if the link between these two peaks doesn't reach 0.5 times of the height of the thing, then they're definitely two separate ridges.
     [ ]width of the peak by fitting in the perpendicular direction of the drawn straight line
-[ ]Approach 2: Burn away the edges
-    [ ]This can also give us useful information about the width of the track, i.e. along the ridge how many steps of burning is required before the fire reaches the centre.
+
 [ ]Approach 3: Correct this backbone using circular/gaussian weight-windows to find a series of weighted corrected backbone.
 [ ]Approach 4: Hybrid of all the above
 
@@ -293,7 +216,7 @@ class Event():
         radius_of_connectivity: float
             The minimum separation distance below which distinct blobs would be considered as the same, conjoint blob instead.
         """
-        for strip_direction in tqdm("uvw", desc="Expanding already-identified blobs:"):
+        for strip_direction in tqdm("uvw", desc="Expanding already-identified blobs"):
             # Ensure that the self.label_large_chunks had been ran and the self.{u,v,w}_blobs variables had been created.
             if not hasattr(self, strip_direction+"_blobs"):
                 raise OperationOrderError(
@@ -315,7 +238,7 @@ class Event():
                     new_signal_blobs[selected_cells] = new_label_used_for_this_chunk
                 # else: # this is already implied
                 #     new_signal_blobs[selected_cells] = 0 
-            setattr(self, strip_direction+"_blobs", new_signal_blobs)
+                setattr(self, strip_direction+"_blobs", new_signal_blobs)
 
     def clean_blobs(self, prominence_threshold=1.5, patch_small_holes=False):
         """Remove any blobs whose max. prominence does not reach the theshold"""
@@ -357,7 +280,11 @@ class Event():
             setattr(self, strip_direction+"_blobs", blob_map)
 
     def calculate_outline(self, separation_tolerance=2):
-        """Trace outline of the blobs"""
+        """Trace outline of the blobs
+        This whole module can actually be replaced by
+        skimage.segmentation.mark_boundaries
+        or
+        skimage.segmentation.find_boundaries"""
         for strip_direction in "uvw":
             if not hasattr(self, strip_direction+"_blobs"):
                 raise OperationOrderError("self.{u,v,w}_blobs must've been first populated by self.label_large_chunks and expanded upon using self.expand_blob")
@@ -392,6 +319,37 @@ class Event():
                 continue
             matching_blob = blob_map==label
             return np.where(matching_blob, prominence, np.nan)
+
+    def denoise_and_highlight(self, method, argument_generator):
+        """
+        Parameters
+        ----------
+        method: function (usually skimage.*.* function)
+            Takes in the raw u/v/w values, and output enhanced values which accentuate the trail while deminishing the trail.
+        argument_generator: function: dict
+            Generates a dictionary of the arguments to be supplied to ``method''
+
+        Returns
+        -------
+        sets the u_enhanced, v_enhanced, w_enhanced attribute to self.
+        """
+        for strip_direction in tqdm("uvw", desc=f"Applying {method.__name__} on each strip direction"):
+            raw_data = getattr(self, strip_direction)
+            argument_dict = argument_generator(raw_data)
+            enhanced_data = method(raw_data, **argument_dict)
+            setattr(self, strip_direction+"_enhanced", enhanced_data)
+
+    def new_threshold_method(self, thresholder):
+        """
+        Parameter
+        ---------
+        thresholder: function(np.array[int])-> np.array[bool]
+        """
+        for strip_direction in "uvw":
+            enhanced_data = getattr(self, strip_direction+"_enhanced")
+            significant_cells = thresholder(enhanced_data)
+            blob_map, num_components = connected_comp_label(significant_cells, structure=np.ones([3,3]))
+            setattr(self, strip_direction+"_blobs", connected_component_map)
 
     @classmethod
     def get_extrema(cls, bool_map):
@@ -485,15 +443,24 @@ class Event():
         pass
 
     def get_uncaptured_variations(self):
-        pass
+        u_blob_map = self.u_blobs>0
+        self.u[u_blob_map] - self.u_model[u_blob_map]
+        v_blob_map = self.v_blobs>0
+        self.v[v_blob_map] - self.v_model[v_blob_map]
+        w_blob_map = self.w_blobs>0
+        self.w[w_blob_map] - self.w_model[w_blob_map]
 
     # @classmethod
     # def copy_from(cls):
     #     copy_of_self = cls.__new__()
 
 if __name__=="__main__":
-    def load_event(num_prongs, num_evt):
+    def event_name_getter(num_prongs, num_evt):
         event_name = "train/merged_{}p/evt{}.png".format(num_prongs, num_evt)
+        return event_name
+
+    def load_event(num_prongs, num_evt):
+        event_name = event_name_getter(num_prongs, num_evt)
         return Event(event_name)
 
     for num_prongs in range(1,4):
@@ -502,48 +469,32 @@ if __name__=="__main__":
         for i in range(0,371):
             # if i not in (1, 16, 17, 20,):
                 # Use 3-prong: evt1, 16, 17 .png as the examples.
-            if i >20:
+            if i>20:
                 continue
             event = load_event(num_prongs, i)
-            def old_analysis_procedure(evt):
+
+            def analysis_procedure1(evt):
                 evt.label_large_chunks(95, 40)
                 evt.expand_blob()
                 evt.clean_blobs()
                 evt.calculate_outline()
-                return
-            old_analysis_procedure(event)
+
+            fig, ax0 = plt.subplots(1)
+            analysis_procedure1(event)
 
             event.plot_as_height_map('u')
             event.plot_as_height_map('v')
             event.plot_as_height_map('w')
 
-            fig, ax0 = plt.subplots(1)
             fig.suptitle(f"{num_prongs}-prongs evt{i}.png")
             ax0.imshow(ary([event.u, event.v, event.w]).transpose([1,2,0])
                 /(len(TRANSLATION_TABLE)-1))
             
-            # def plot_a_line(line, step_size, color, offset=None, label=None, **kwargs):
-            #     outline_xy = ary(line)[:,::-1]
-            #     ax0.plot(*(outline_xy[offset::step_size].T), color=color, label=label, **kwargs)
-
-            # for line in event.u_outline_lists:
-            #     plot_a_line(line, 1, 'red', label='u1')
-            #     plot_a_line(line, 3, 'tomato', label='u3')
-            #     plot_a_line(line, 4, 'firebrick', label='u4')
-            # for line in event.v_outline_lists:
-            #     plot_a_line(line, 1, 'green', label='v1')
-            #     plot_a_line(line, 3, 'lime', label='v3')
-            #     plot_a_line(line, 4, 'darkgreen', label='v4')
-            # for line in event.w_outline_lists:
-            #     plot_a_line(line, 1, 'blue', label='w1')
-            #     plot_a_line(line, 3, 'royalblue', label='w3')
-            #     plot_a_line(line, 4, 'mediumblue', label='w4')
-
             [ax0.plot(*(ary(line).T[::-1]), color='red') for line in event.u_outline_lists]
             [ax0.plot(*(ary(line).T[::-1]), color='green') for line in event.v_outline_lists]
             [ax0.plot(*(ary(line).T[::-1]), color='blue') for line in event.w_outline_lists]
-
             ax0.set_title("Overlayed by extracted outlines")
+
             ax0.set_xlabel("time (bin)")
             ax0.set_ylabel("strip number")
             plt.tight_layout()
@@ -552,22 +503,19 @@ if __name__=="__main__":
             except KeyboardInterrupt:
                 print("KeyboardInterrupt - program exit.")
                 sys.exit()
-            import seaborn as sns
 
 """
 Potential workflow:
-# filters.
-    frangi(sigmas=range(4,18,2), black_ridges=False, mode='constant'),
-    butterworth(cutoff_frequency_ratio=0.05,
-                high_pass=False,
-                order=4,
-                squared_butterworth=True)
-
-[optional] filters.apply_hysteresis_threshold()
-[optional] outline = segmentation.active_contour(
+1.
+    old_analysis_procedure()
+    active_contour(0.05, 0.005)
+    outline = segmentation.active_contour(
                     ary(outline_i)[::skip_size],
                     alpha=0.005, beta=0.05
                 )
     bool_map = polygon2mask(outline)
+2. 
     skeletonize(bool_map)
+3. 
+    Correct this backbone using circular/gaussian weight-windows to find a series of weighted corrected backbone.
 """
