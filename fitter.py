@@ -465,13 +465,13 @@ if __name__=="__main__":
         return Event(event_name)
 
     for num_prongs in range(1,4):
-        if num_prongs!=3:
-            continue
         for i in range(0,371):
-            if any([
+            if not any([
+                    # choose what sampels to look at
+                    num_prongs==3,
                     # i!=11,
-                    # i>20,
-                    i not in (1, 11, 16, 17, 20,),
+                    i<20,
+                    i in (1, 11, 16, 17, 20,),
                 ]):
                 continue
             event = load_event(num_prongs, i)
@@ -486,7 +486,7 @@ if __name__=="__main__":
             event.plot_as_height_map('u')
             event.plot_as_height_map('v')
             event.plot_as_height_map('w')
-            fig, ax0 = plt.subplots(1)
+            fig, (ax0, ax1) = plt.subplots(1, 2)
 
             fig.suptitle(f"{num_prongs}-prongs evt{i}.png")
             ax0.imshow(ary([event.u, event.v, event.w]).transpose([1,2,0])
@@ -497,10 +497,31 @@ if __name__=="__main__":
             [ax0.plot(*(ary(line).T[::-1]), color='green') for line in event.v_outline_lists]
             [ax0.plot(*(ary(line).T[::-1]), color='blue') for line in event.w_outline_lists]
 
-            ax0.set_title("Encircled by the outline")
+            ax0.set_title("Raw data encircled by the outline")
 
+            # <For Kris>
+            contour_params = dict(
+                                    alpha=0.003, # continuity (self-attraction, i.e. contractive force)
+                                    beta=0.05, # curvature (resists kinks in line)
+                                    gamma=0.5, # how strongly coupled to the image (scales w_line and w_edge, but not linearly, I believe)
+                                    w_line=-0.05, # attraction to brightness on the image (-ve = attraction to darkness)
+                                    w_edge=1, # attraction to edge on the image
+                                )
+            u_snake = active_contour(event.u, ary(event.u_outline_lists[0]), **contour_params) # looking at only the first blob, assuming that blob is the biggest/ most salient blob.
+            u_skeleton = skeletonize(polygon2mask(event.u.shape, u_snake))
+            v_snake = active_contour(event.v, ary(event.v_outline_lists[0]), **contour_params) # looking at only the first blob, assuming that blob is the biggest/ most salient blob.
+            v_skeleton = skeletonize(polygon2mask(event.v.shape, v_snake))
+            w_snake = active_contour(event.w, ary(event.w_outline_lists[0]), **contour_params) # looking at only the first blob, assuming that blob is the biggest/ most salient blob.
+            w_skeleton = skeletonize(polygon2mask(event.v.shape, w_snake))
+            ax1.imshow(ary([u_skeleton, v_skeleton, w_skeleton]).transpose([1,2,0]).astype(float))
+            ax1.set_title("backbones extracted")
+
+            # </For Kris>
             ax0.set_xlabel("time (bin)")
             ax0.set_ylabel("strip number")
+            ax1.set_xlabel("time (bin)")
+            ax1.set_ylabel("strip number")
+
             plt.tight_layout()
             try:
                 plt.show()
